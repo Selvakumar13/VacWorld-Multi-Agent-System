@@ -1,0 +1,228 @@
+agent VacBot {
+    module EIS ei;
+    module Console C;
+    module Routing routing;
+    module astra.lang.custom.RandomInRange random; 
+
+    types ls{
+        formula location(long, long);
+        formula direction(string);
+        formula light(string);
+        formula square(string, string);
+        formula task(string); 
+        formula free(string);
+        formula count(int);
+        formula route(list);
+        formula destinationRoute(long, long);
+        formula obstacleCount(list);
+        formula bugOut(int);
+        formula dirtyTile(long, long);
+        formula updateObstacle(long, long, string, string);
+        formula updateMax(long, long);
+        formula checkDirt(long, long);
+    }
+
+    initial count(0), obstacleCount([]), bugOut(0);
+
+    inference free(string loc) :- ei.square(loc, "empty") | ei.square(loc, "dust") ;
+
+    rule +!main([string vacbot]) {
+        ei.join("hw");
+        ei.link(vacbot);
+        C.println("VacBot activated");
+    }
+
+
+    rule +$ei.event(location(long X, long Y)) 
+    { 
+        // !task(string action); 
+        if(ei.direction(string D))
+        {
+            foreach(ei.square(string loc, "obstacle") & ~routing.obstacle(X, Y, D, loc)) 
+            {
+                routing.recordObstacle(X, Y, D, loc);
+            }
+        }
+        if(X > routing.maxX())
+        {
+            routing.updateBoundary(X + 1, routing.maxY());
+        }
+        if(Y > routing.maxY())
+        {
+            routing.updateBoundary(routing.maxX(), Y + 1);
+        }
+    }
+
+    rule +$ei.event(task("none")) { !task(string action); }
+
+
+    rule +!task(string action) : route([funct move]){ // for last move
+        // C.println("hiii");
+        -+route([]);
+        !go(move, action);
+        
+        C.println("Route ended");
+        -destinationRoute(long X, long Y);
+        -+bugOut(0);
+        -+count(0);
+    }
+
+
+    rule +!task(string action) : route([funct move| list L]) { // for list moves
+        // C.println("hiii LIST");
+        -+route(L);
+        !go(move, action);
+    }
+
+
+    // rule +!go(move(string direction), string action): (ei.square(string loc, "obstacle") |  ei.square(loc, "vac")) & ei.location(long X, long Y) & destinationRoute(long tx,long ty) {
+    //     !newRoute(X, Y, tx, ty);
+    //     !task("move");
+    // }
+
+    rule +!go(move(string direction), string action): ei.direction(direction) & (ei.square("forward", "obstacle") | ei.square("forward", "vac"))  {
+        // C.println("Incorrect directions");
+        !newRoute();
+        !task("move");
+    }
+
+
+    rule +!go(move(string direction), string action)  {
+        // C.println("gogogo");
+        ei.move(direction);
+        action = direction;
+        // C.println("direction: " + direction);
+    }
+
+
+
+
+    rule +!task(string action) : ei.square("here", "dust")
+    {
+        ei.clean();
+        action = "clean";
+    }
+
+    rule +!task(string action) : ei.square("forward", "dust"){
+        ei.move("forward");
+        action = "move";
+    }
+    rule +!task(string action) : ei.square("left", "dust"){
+        ei.move("left");
+        action = "move";
+    }
+    rule +!task(string action) : ei.square("right", "dust"){
+        ei.move("right");
+        action = "move";
+    }
+
+
+    rule +!task(string action) : count(3) {
+        -+count(11);
+        !nav();
+        !task("move");
+    }
+
+
+    rule +!nav()
+    {
+        long sx = routing.maxX();
+        long sy = routing.maxY();
+        long tx = random.randomLongBetween(0, sx);
+        long ty = random.randomLongBetween(0, sy);
+        if(ei.location(long X, long Y) & ei.direction(string dir))
+        {
+            C.println("random: "+tx+" " +ty + " from: " + X +" " + Y + "looking at: " + dir);
+            list L = routing.routeTo(X, Y, tx, ty);
+            // routing.displayMap();
+            C.println("L: "+L);
+            if(L == [])
+            {
+                -+count(0);
+            }
+            else{
+                +route(L);
+                +destinationRoute(tx, ty);
+            }
+        }
+        else{
+            -+count(0);
+        }
+    }
+ 
+
+    rule +!task(string action) : ei.square("forward", "empty") & count(int c){
+        if(c > 14){-+count(0);}
+        ei.move("forward");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+    rule +!task(string action) : ei.square("left", "empty") & count(int c){
+        ei.move("left");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+
+
+    rule +!task(string action) : ei.square("right", "empty") & count(int c){
+        ei.move("right");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+    rule +!task(string action) : (ei.square("right", "obstacle") | ei.square("right", "vac")) & (ei.square("left", "obstacle") | ei.square("left", "vac")) & (ei.square("forward", "obstacle") | ei.square("forward", "vac")) & count(int c){
+        ei.move("back");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+    // rule +$ei.event(count(int c)){
+    //     C.println("Handling belief update: " + c);
+    // }
+
+    rule +!newRoute(): ei.location(long X, long Y) & destinationRoute(long tx, long ty) & bugOut(int oc)
+    {
+        if(oc > 5)
+        {
+            -+bugOut(0);
+            -destinationRoute(tx, ty);
+            -+count(2);
+            // !nav();
+        }
+        else{
+            -+bugOut(oc + 1);
+            if(ei.direction(string dir))
+            {
+                C.println("random: "+tx+" " +ty + " from: " + X +" " + Y + "looking at: " + dir);
+                list L = routing.routeTo(X, Y, tx, ty);
+                // routing.displayMap();
+                C.println("L: "+L);
+                if(L == [])
+                {
+                    -+count(0);
+                }
+                else{
+                    -+route(L);
+                }
+            }else{-+count(1);}
+        }
+        
+    }
+
+    rule +!newRoute()
+    {
+        -+count(0);
+        if(destinationRoute(long X, long Y))
+        {-destinationRoute(X, Y);}
+        -+bugOut(0);
+    }
+
+
+
+}

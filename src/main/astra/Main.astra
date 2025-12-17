@@ -1,0 +1,40 @@
+agent Main {
+    module EIS ei;
+    module Console C;
+    module System S;
+
+    rule +!main(list args) {
+        ei.launch("hw","dependency/vacuumworld-1.3.0.jar");
+        string lvl = "8";
+        ei.init([generation("no"), level(lvl)]);
+
+        // the value of level("1") will setup only 1 VacBot.
+        // ei.init([generation("no"), level("1")]);
+        boolean leader = true;
+        list entities = ei.freeEntities();
+        forall(string entity : entities) {
+            // C.println(ei.freeEntities());
+            if(lvl == "1")
+            {
+                S.createAgent(entity, "VacBot");
+                S.setMainGoal(entity, [entity]);
+            }
+            else{
+                if(leader)
+            {
+                S.createAgent(entity, "Leader");
+                S.setMainGoal(entity, [entity]);
+                leader = false;
+            }
+            else{
+                S.createAgent(entity, "Follower");
+                S.setMainGoal(entity, [entity]);
+            }
+            }
+            
+            
+        }
+        ei.start();
+    }
+
+}

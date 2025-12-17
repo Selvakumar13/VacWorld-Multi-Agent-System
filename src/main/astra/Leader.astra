@@ -1,0 +1,402 @@
+agent Leader {
+    module EIS ei;
+    module Console C;
+    module System S;
+    module Routing routing;
+    module astra.lang.custom.RandomInRange random; 
+
+
+    types ls{
+        formula location(long, long);
+        formula direction(string);
+        formula light(string);
+        formula square(string, string);
+        formula task(string); 
+        // formula free(string);
+        formula route(list);
+        formula destinationRoute(long, long);
+        formula obstacleCount(list);
+        formula bugOut(int);
+        formula allDirtyTiles(list);
+        formula dirtyTile(long, long);
+        formula updateObstacle(long, long, string, string);
+        formula updateMax(long, long);
+        formula count(int);
+        formula checkDirt(long, long);
+    }
+    initial allDirtyTiles([]), count(0);
+
+    rule +!main([string vacbot]) {
+        ei.join("hw");
+        ei.link(vacbot);
+        C.println("Leader activated");
+        S.sleep(50);
+        if(ei.location(long X, long Y))
+        {
+            list followers = S.getAgentsOfType("Follower"); 
+            int i = list_count(followers)-1;
+                // update all followers about obstacles
+            while(i>=0)
+            {
+                send(inform, at_index(followers, i, string), updateMax(X, Y));
+                i = i-1;
+            }
+        }
+    }
+
+    // rule +$ei.event(square(string loc, "vac"))
+    // {
+    //     C.println("ROBO VAC!!!");
+    // }
+   
+    rule +$ei.event(location(long X, long Y)) 
+    { 
+        // !task(string action); 
+        list followers = S.getAgentsOfType("Follower"); 
+        if(ei.direction(string D))
+        {
+            foreach(ei.square(string loc, "obstacle") & ~routing.obstacle(X, Y, D, loc)) 
+            {
+                routing.recordObstacle(X, Y, D, loc);
+                
+                int i = list_count(followers)-1;
+                // update all followers about obstacles
+                while(i>=0)
+                {
+                    send(inform, at_index(followers, i, string), updateObstacle(X, Y, D, loc));
+                    i = i-1;
+                }
+            }
+        }
+        if(X > routing.maxX())
+        {
+            routing.updateBoundary(X + 1, routing.maxY());
+            
+        }
+        if(Y > routing.maxY())
+        {
+            routing.updateBoundary(routing.maxX(), Y + 1);
+        }
+        
+        int i = list_count(followers)-1;
+        while(i>=0)
+        {
+            send(inform, at_index(followers, i, string), updateMax(X, Y));
+            i = i-1;
+        }
+    }
+
+    rule +$ei.event(task("none")) { !task(string action); }
+
+
+
+    rule +!task(string action) : (ei.square("right", "obstacle") | ei.square("right", "vac")) & (ei.square("left", "obstacle") | ei.square("left", "vac")) & (ei.square("forward", "obstacle") | ei.square("forward", "vac")) & count(int c){
+        ei.move("back");
+        action = "move";
+        !newRoute();
+        -+count(c + 1);
+    }
+
+    rule +!task(string action) : route([funct move]){ // for last move
+        // C.println("hiii");
+        -+route([]);
+        !go(move, action);
+        
+        // C.println("Route ended");
+        -destinationRoute(long X, long Y);
+        -+bugOut(0);
+        -+count(0);
+    }
+
+    rule +!task(string action) : route([funct move| list L]) { // for list moves
+        // C.println("hiii LIST");
+        
+        -+route(L);
+        !go(move, action);
+    }
+
+    rule +!go(move(string direction), string action): ei.direction(direction) & (ei.square("forward", "obstacle") | ei.square("forward", "vac")) {
+        // C.println("Incorrect directions");
+        !newRoute();
+        !task("move");
+    }
+
+
+
+
+    rule +!go(move(string direction), string action)  {
+        // C.println("gogogo");
+        if(ei.square("forward", "dust"))
+        {
+            !decideCoord("forward");
+        }
+        if(ei.square("left", "dust"))
+        {
+            !decideCoord("left");
+        }
+        if(ei.square("right", "dust"))
+        {
+            !decideCoord("right");
+        }
+        ei.move(direction);
+        action = direction;
+        // C.println("direction: " + direction);
+    }
+
+    rule +!task(string action) : count(4) {
+        -+count(11);
+        !nav();
+        !task("move");
+    }
+
+
+    rule +!task(string action) : ei.square("forward", "dust") & count(int c){
+        !decideCoord("forward");
+        ei.move("forward");
+        action = "move";
+        -+count(c + 1);
+    }
+
+    rule +!task(string action) : ei.square("left", "dust") & count(int c){
+        !decideCoord("left");
+        ei.move("left");
+        action = "move";
+        -+count(c + 1);
+    }
+    rule +!task(string action) : ei.square("right", "dust") & count(int c){
+        !decideCoord("right");
+        ei.move("right");
+        action = "move";
+        -+count(c + 1);
+    }
+
+
+
+   rule +!task(string action) : ei.square("forward", "empty") & count(int c){
+        if(c > 14){-+count(0);}
+        ei.move("forward");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+    rule +!task(string action) : ei.square("left", "empty") & count(int c){
+        ei.move("left");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+
+
+    rule +!task(string action) : ei.square("right", "empty") & count(int c){
+        ei.move("right");
+        action = "move";
+        -+count(c + 1);
+        // C.println(c);
+    }
+
+    
+
+
+    rule +!nav()
+    {
+        long sx = routing.maxX();
+        long sy = routing.maxY();
+        long tx = random.randomLongBetween(0, sx);
+        long ty = random.randomLongBetween(0, sy);
+        if(ei.location(long X, long Y) & ei.direction(string dir))
+        {
+            // C.println("random: "+tx+" " +ty + " from: " + X +" " + Y);
+            list L = routing.routeTo(X, Y, tx, ty);
+            // routing.displayMap();
+            // C.println("L: "+L);
+            if(L == [])
+            {
+                -+count(0);
+            }
+            else{
+                +route(L);
+                +destinationRoute(tx, ty);
+            }
+        }
+        else{
+            -+count(0);
+        }
+    }
+
+
+
+
+    rule +!decideCoord(string dirtDir): ei.location(long X, long Y) & (ei.direction(string dir))
+    {
+        
+        long tx = routing.returnObstacleX(X, Y, dir, dirtDir);
+        long ty = routing.returnObstacleY(X, Y, dir, dirtDir);
+        // C.println(tx + " " + ty);
+        if(allDirtyTiles(list L))
+        {
+            // C.println(L);
+            list temp = [tx] + [ty];
+            !contains(temp);
+            // -+allDirtyTiles(temp);
+        }
+    }
+
+
+
+
+    rule +!contains(list Target): allDirtyTiles(list L) {
+    list Sublist;
+    boolean add= true;
+    int i = list_count(L)-1;
+    while(i>=0)
+    {
+        Sublist = at_index(L, i, list);
+        if (Sublist == Target) {
+            // C.println("The target list is in the list of lists." + Target +" " + Sublist);
+            add=false;
+        }
+        i = i-1;
+    }
+    if(add & allDirtyTiles(list l))
+    {
+        list temp = l + [Target];
+        -+allDirtyTiles(temp);
+        // C.println(temp);
+    }
+}
+
+
+     rule +!newRoute(): ei.location(long X, long Y) & destinationRoute(long tx, long ty) & bugOut(int oc)
+    {
+        if(oc > 5)
+        {
+            -+bugOut(0);
+            -destinationRoute(tx, ty);
+            -+count(2);
+            ei.move("back");
+            if(task(string action))
+            {
+                action = "move";
+            }else{!task("move");}
+            // !nav();
+        }
+        else{
+            -+bugOut(oc + 1);
+            if(ei.direction(string dir))
+            {
+                // C.println("random: "+tx+" " +ty + " from: " + X +" " + Y);
+                list L = routing.routeTo(X, Y, tx, ty);
+                // routing.displayMap();
+                // C.println("L: "+L);
+                if(L == [])
+                {
+                    -+count(0);
+                }
+                else{
+                    -+route(L);
+                }
+            }else{-+count(1);}
+        }
+        
+    }
+
+    rule +!newRoute()
+    {
+        -+count(0);
+        if(destinationRoute(long X, long Y))
+        {-destinationRoute(X, Y);}
+        -+bugOut(0);
+    }
+
+
+
+    rule +!sendDirtyTile(string sender, list L)
+    {
+            if(list_count(L) > 0)
+            {
+                int r = random.randomIntBetween(0, list_count(L));
+                list tempNew = at_index(L, r, list);
+                long tempX = at_index(tempNew, 0, long);
+                long tempY = at_index(tempNew, 1, long);
+                send(inform, sender, dirtyTile(tempX, tempY));
+            }else{send(inform, sender, task("none"));}
+        
+    }
+
+    rule +!informCleanedTile(long X, long Y){
+        list followers = S.getAgentsOfType("Follower");
+        int i = list_count(followers) - 1;
+        while(i>=0)
+        {
+            send(inform, at_index(followers, i, string), checkDirt(X, Y));
+            i=i-1;
+        }
+    }
+
+
+rule +$ei.event(funct f){
+        list followers = S.getAgentsOfType("Follower");
+        int i = list_count(followers) - 1;
+        while(i>=0)
+        {
+            send(inform, at_index(followers, i, string), task("check"));
+            i=i-1;
+        }
+    }
+
+
+
+// messages go below
+
+    rule @message(inform, string sender, dirtyTile(long X, long Y))
+    {
+        list temp = [];
+        // C.println(sender+" cleaned tile " + X +", " + Y);
+        if(allDirtyTiles(list L))
+        {
+            list Sublist;
+            int i = list_count(L)-1;
+            list Target = [X] + [Y];
+            // C.println("This is L " + L );
+            while(i>=0)
+            {
+                Sublist = at_index(L, i, list);
+                if (Sublist == Target) {
+                }
+                else{
+                    temp = temp + [Sublist];
+                }
+                i = i-1;
+            }
+            -+allDirtyTiles(temp);
+        //     C.println(temp);
+            
+        }
+        !informCleanedTile(X, Y);
+        // !sendDirtyTile(sender, temp);
+    }
+
+
+    rule @message(inform, string sender,  updateMax(long X,long Y))
+    {
+        if(X > routing.maxX())
+        {
+            routing.updateBoundary(X + 1, routing.maxY());
+        }
+        if(Y > routing.maxY())
+        {
+            routing.updateBoundary(routing.maxX(), Y + 1);
+        }
+    }
+
+    rule @message(inform, string sender,  task(string S))
+    {
+        if((S == "none") & allDirtyTiles(list L))
+        {
+            !sendDirtyTile(sender, L);
+        }
+    }
+
+}

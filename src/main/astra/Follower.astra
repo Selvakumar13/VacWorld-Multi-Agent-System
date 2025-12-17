@@ -1,0 +1,295 @@
+agent Follower{
+    module EIS ei;
+    module Console C;
+    module Routing routing;
+    module astra.lang.custom.RandomInRange random; 
+    module System S;
+
+    types ls{
+        formula location(long, long);
+        formula direction(string);
+        formula light(string);
+        formula square(string, string);
+        formula task(string); 
+        formula free(string);
+        formula count(int);
+        formula route(list);
+        formula destinationRoute(long, long);
+        formula obstacleCount(list);
+        formula bugOut(int);
+        formula dirtyTile(long, long);
+        formula updateObstacle(long, long, string, string);
+        formula updateMax(long, long);
+        formula checkDirt(long, long);
+    }
+    initial bugOut(0), route([]);
+
+    rule +!main([string vacbot]) {
+        ei.join("hw");
+        ei.link(vacbot);
+        C.println("Follower activated");
+        !task("none");
+        S.sleep(500);
+        if(ei.location(long X, long Y))
+        {
+            send(inform, "Henry", updateMax(X, Y));
+            list followers = S.getAgentsOfType("Follower"); 
+            int i = list_count(followers)-1;
+                // update all followers about obstacles
+            while(i>=0)
+            {
+                send(inform, at_index(followers, i, string), updateMax(X, Y));
+                i = i-1;
+            }
+        }
+        
+    }
+
+
+    rule +$ei.event(location(long X, long Y)) 
+    { 
+        list followers = S.getAgentsOfType("Follower"); 
+        
+        if(ei.direction(string D))
+        {
+            foreach(ei.square(string loc, "obstacle") & ~routing.obstacle(X, Y, D, loc))
+            {
+                routing.recordObstacle(X, Y, D, loc);
+                int i = list_count(followers)-1;
+                // update all followers about obstacles
+                while(i>=0)
+                {
+                    send(inform, at_index(followers, i, string), updateObstacle(X, Y, D, loc));
+                    i = i-1;
+                }
+            }
+        }
+        if(X > routing.maxX())
+        {
+            routing.updateBoundary(X + 1, routing.maxY());
+        }
+        if(Y > routing.maxY())
+        {
+            routing.updateBoundary(routing.maxX(), Y + 1);
+        }
+        !task(string action); 
+    }
+
+rule +!task(string action) : ei.square("here", "dust") & ei.location(long X, long Y) & (destinationRoute(X, Y) | route([]))
+    {
+        ei.clean();
+        action = "clean";
+        send(inform, "Henry", dirtyTile(X, Y));
+    }
+    
+
+
+    rule +$ei.event(task("none")): route([]){ 
+        S.sleep(3000);
+        send(inform, "Henry", task("none"));
+        !task("none");
+     }
+
+    rule +!task("none"){}
+
+    
+
+    rule +!task(string action) : route([funct move]){ // for last move
+        -+route([]);
+        !go(move, action);
+        -destinationRoute(long X, long Y);
+        -+bugOut(0);
+        if(ei.square("here", "dust"))
+        {
+            ei.clean();
+            action = "clean";
+            // S.sleep(1000);
+        }
+        if(ei.location(long tx, long ty))
+        {
+            send(inform, "Henry", dirtyTile(tx, ty));
+        }
+        
+    }
+
+
+
+    rule +!task(string action) : route([funct move| list L]) { // for list moves
+        -+route(L);
+        !go(move, action);
+    }
+
+    rule +!go(move(string direction), string action): ei.direction(string direction2) & (ei.square("left", "vac") | ei.square("left", "obstacle")) & (ei.square("forward", "vac") | ei.square("forward", "obstacle")) & (ei.square("right", "vac") | ei.square("right", "obstacle")) {
+        ei.move("back");
+        action = "move";
+        !newRoute();
+    }
+
+    rule +!go(move(string direction), string action): ei.direction(string direction2) & (ei.square("left", "vac") | ei.square("left", "obstacle")) & (ei.square("forward", "vac") | ei.square("forward", "obstacle")) {
+        ei.move("right");
+        action = "move";
+        !newRoute();
+    }
+
+    rule +!go(move(string direction), string action): ei.direction(string direction2) & (ei.square("right", "vac") | ei.square("right", "obstacle")) & (ei.square("forward", "vac") | ei.square("forward", "obstacle")) {
+        ei.move("left");
+        action = "move";
+        !newRoute();
+    }
+
+    rule +!go(move(string direction), string action): ei.direction(string direction2) & (ei.square("forward", "vac") | ei.square("forward", "obstacle")) {
+        ei.move("left");
+        action = "move";
+        !newRoute();
+    }
+
+    
+
+    // rule +!go(move(string direction), string action): ei.direction(direction) & (ei.square("forward", "obstacle") | ei.square("left", "obstacle") | ei.square("right", "obstacle"))  {
+    //     !newRoute();
+    // }
+
+
+    rule +!go(move(string direction), string action)  {
+        // S.sleep(20);
+        ei.move(direction);
+        action = direction;
+        !task("move");
+    }
+
+
+
+    rule +!task(string action) : ei.square("here", "dust") & ei.location(long X, long Y)
+    {
+        ei.clean();
+        action = "clean";
+        // S.sleep(1000);
+        send(inform, "Henry", dirtyTile(X, Y));
+    }
+    
+    
+    rule +!newRoute(): ei.location(long X, long Y) & destinationRoute(long tx, long ty) & bugOut(int oc)
+    {
+        // C.println("Newroute: " + tx + " " + ty + "from: " + X + " " + Y + " OC: " + oc);
+        if(oc > 5)
+        {
+            C.println("Bugged route");
+            -+bugOut(0);
+            -+route([]);
+            -destinationRoute(tx, ty);
+            ei.move("back");
+            !task("move");
+            S.sleep(20);
+            !task("none");
+            
+            // !nav();
+        }
+        else{
+            -+bugOut(oc + 1);
+            if(ei.direction(string dir))
+            {
+                
+                list L = routing.routeTo(X, Y, tx, ty);
+                // routing.displayMap();
+                C.println("Route: "+tx+" " +ty + " from: " + X +" " + Y + " " + L);
+                // C.println("L: "+L);
+                if(L == [])
+                {
+                    -destinationRoute(tx, ty);
+                    -+route([]);
+                    !task("none");
+                }
+                else{
+                    -+route(L);
+                    !task("move");
+                }
+            }else{}
+        }
+    }
+
+    rule +!newRoute()
+    {
+        
+        if(destinationRoute(long X, long Y))
+        {-destinationRoute(X, Y); !task("none"); -+route([]);}
+        -+bugOut(0);
+    }
+
+    // fail safe
+    rule +!task("move")
+    {
+        // C.println("FILE SAFE ISUE");
+        // if(destinationRoute(long X, long Y))
+        // {-destinationRoute(X, Y);}
+        // -+route([]);
+        // !task("none");
+    }
+
+
+rule +$ei.event(task(string act)){
+    // C.println("behavior: " + act);
+        // if(allDirtyTiles(list L))
+        // {C.println(L);}
+    }
+
+    rule @message(inform, string sender,  updateObstacle(long X,long Y,string D, string loc) )
+    {
+        routing.recordObstacle(X, Y, D, loc);
+    }
+
+    rule @message(inform, string sender, dirtyTile(long X, long Y))
+    {
+        if(route([]))
+        {
+            -+destinationRoute(X, Y);
+            !newRoute();
+        }
+        
+    }
+
+    rule @message(inform, string sender,  updateMax(long X,long Y) )
+    {
+        // C.println("Updating boundary");
+        if(X > routing.maxX())
+        {
+            routing.updateBoundary(X + 1, routing.maxY());
+        }
+        if(Y > routing.maxY())
+        {
+            routing.updateBoundary(routing.maxX(), Y + 1);
+        }
+    }
+
+    rule @message(inform, string sender,  task(string s) )
+    {
+        if(s == "none")
+        {
+            !task(s);
+        }
+        if(s == "check")
+        {
+            if(ei.location(long X, long Y) & route([]))
+            {
+                !task("none");
+                send(inform, "Henry", task("none"));
+            }
+            
+        }
+    }
+
+
+    rule @message(inform, string sender,  checkDirt(long X, long Y) )
+    {
+        if(destinationRoute(long tx, long ty))
+        {
+            if(X == tx & Y == ty)
+            {
+                !task("none");
+                -+route([]);
+                -destinationRoute(X, Y);
+                send(inform, "Henry", task("none"));
+            }
+        }
+    }
+
+}
